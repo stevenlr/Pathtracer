@@ -25,6 +25,14 @@ inline Vec3 vec3_add(Vec3 a, Vec3 b)
     return a;
 }
 
+inline Vec3 vec3_sub(Vec3 a, Vec3 b)
+{
+    a.x -= b.x;
+    a.y -= b.y;
+    a.z -= b.z;
+    return a;
+}
+
 inline f32 vec3_len2(Vec3 v)
 {
     return vec3_dot(v, v);

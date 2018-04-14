@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
+#include <stdbool.h>
 
 typedef char i8;
 typedef short i16;
@@ -74,7 +75,7 @@ struct Camera
 {
     u32 width;
     u32 height;
-    float ratio;
+    f32 ratio;
 };
 typedef struct Camera Camera;
 
@@ -82,15 +83,15 @@ Camera camera_new(u32 width, u32 height)
 {
     Camera cam = {
         width, height,
-        (float)width / height
+        (f32)width / height
     };
     return cam;
 }
 
 Ray camera_gen_ray(Camera * cam, u32 x, u32 y)
 {
-    float xx = (float)x * 2.0f / cam->width - 1.0f;
-    float yy = (1.0f - (float)y * 2.0f / cam->height) / cam->ratio;
+    f32 xx = (f32)x * 2.0f / cam->width - 1.0f;
+    f32 yy = (1.0f - (f32)y * 2.0f / cam->height) / cam->ratio;
     Vec3 dir = { xx, 1.0f, yy };
     dir = vec3_normalize(dir);
     Ray ray = { { 0, 0, 0 }, dir };
@@ -115,9 +116,29 @@ int main(int argc, char * argv[])
     for (u32 y = 0; y < height; ++y) {
         for (u32 x = 0; x < width; ++x) {
             Ray ray = camera_gen_ray(&camera, x, y);
-            Vec3 color = vec3_add(
-                    vec3_mult_k(top_color, (ray.dir.z + 1.0f) / 2.0f),
-                    vec3_mult_k(bottom_color, 1.0 - (ray.dir.z + 1.0f) / 2.0f));
+            Vec3 color = { 0 };
+            
+            {
+                static const Vec3 center = { -0.5f, 7.0f, -0.5f };
+                const f32 radius = 2.0f;
+                Vec3 diff = vec3_sub(ray.o, center);
+                f32 a = vec3_dot(ray.dir, ray.dir);
+                f32 b = 2 * vec3_dot(ray.dir, diff);
+                f32 c = vec3_dot(diff, diff) - radius * radius;
+                f32 d = b * b - 4 * a * c;
+
+                if (d >= 0)
+                {
+                    color.x = 1.0f;
+                    color.y = 0.0f;
+                    color.z = 0.0f;
+                }
+                else
+                {
+                    color = vec3_add(vec3_mult_k(top_color, (ray.dir.z + 1.0f) / 2.0f),
+                            vec3_mult_k(bottom_color, 1.0 - (ray.dir.z + 1.0f) / 2.0f));
+                }
+            }
 
             *ptr++ = color.z * 255.99f;
             *ptr++ = color.y * 255.99f;
