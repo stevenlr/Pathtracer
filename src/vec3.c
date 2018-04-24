@@ -1,15 +1,13 @@
-struct Vec3
+typedef struct Vec3
 {
     f32 x;
     f32 y;
     f32 z;
-};
-typedef struct Vec3 Vec3;
+} Vec3;
 
 inline Vec3 vec3_neg(Vec3 v)
 {
-    Vec3 n = { -v.x, -v.y, -v.z };
-    return n;
+    return (Vec3){ -v.x, -v.y, -v.z };
 }
 
 inline f32 vec3_dot(Vec3 a, Vec3 b)
@@ -57,3 +55,10 @@ inline Vec3 vec3_normalize(Vec3 v)
     return vec3_mult_k(v, inv_len);
 }
 
+inline Vec3 vec3_pow(Vec3 v, float p)
+{
+    v.x = powf(v.x, p);
+    v.y = powf(v.y, p);
+    v.z = powf(v.z, p);
+    return v;
+}
