@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <string.h>
 #include <stdio.h>
 #include <math.h>
 #include <stdbool.h>
@@ -18,7 +19,53 @@ typedef unsigned long long u64;
 typedef float f32;
 typedef double f64;
 
+f32 randf(f32 a, f32 b)
+{
+    return ((f32)rand() / RAND_MAX) * (b - a) + a;
+}
+
 #include "vec3.c" 
+
+typedef struct Frame
+{
+    Vec3 u;
+    Vec3 v;
+    Vec3 n;
+} Frame;
+
+Frame make_frame_from_normal(Vec3 n)
+{
+    Frame frame = { .n = vec3_normalize(n) };
+
+    if (fabsf(frame.n.x) > fabsf(frame.n.y)) {
+        frame.u = vec3_normalize((Vec3){ -frame.n.z, 0.0f, frame.n.x });
+    }
+    else {
+        frame.u = vec3_normalize((Vec3){ 0.0f, frame.n.z, -frame.n.y });
+    }
+
+    frame.v = vec3_cross(frame.n, frame.u);
+    return frame;
+}
+
+Vec3 make_ray_hemisphere(Vec3 n, f32 * probability)
+{
+    Frame frame = make_frame_from_normal(n);
+
+    f32 h_uniform = randf(0.0f, 1.0f);
+    f32 v_uniform = randf(0.0f, 1.0f);
+
+    f32 hangle = 2.0f * (f32)M_PI * h_uniform;
+    f32 vangle = asinf(sqrtf(v_uniform));
+
+    f32 sin_vangle = sinf(vangle);
+
+    Vec3 u = vec3_mult_k(frame.u, cosf(hangle) * sin_vangle);
+    Vec3 v = vec3_mult_k(frame.v, sinf(hangle) * sin_vangle);
+    n = vec3_mult_k(frame.n, cosf(vangle));
+    
+    return vec3_add(vec3_add(u, v), n);
+}
 
 typedef struct Ray
 {
@@ -56,8 +103,11 @@ Camera make_camera(u32 width, u32 height)
 
 Ray camera_gen_ray(const Camera * cam, u32 x, u32 y)
 {
-    f32 xx = (f32)x * 2.0f / cam->width - 1.0f;
-    f32 yy = (1.0f - (f32)y * 2.0f / cam->height) / cam->ratio;
+    f32 jitter_x = randf(-0.5f, 0.5f);
+    f32 jitter_y = randf(-0.5f, 0.5f);
+
+    f32 xx = ((f32)x + jitter_x) * 2.0f / cam->width - 1.0f;
+    f32 yy = (1.0f - ((f32)y + jitter_y) * 2.0f / cam->height) / cam->ratio;
     Vec3 dir = { xx, 1.5f, yy };
     dir = vec3_normalize(dir);
     return (Ray){ cam->center, dir };
@@ -105,6 +155,8 @@ Object make_plane(Vec3 normal, Vec3 center, Vec3 color)
     };
 }
 
+#define HIT_EPSILON 0.0001
+
 bool plane_intersect(const Object * obj, const Ray * ray, Intersection * intersection)
 {
     f32 n_dot_dir = vec3_dot(obj->plane.normal, ray->dir);
@@ -114,7 +166,7 @@ bool plane_intersect(const Object * obj, const Ray * ray, Intersection * interse
     f32 n_dot_o = vec3_dot(obj->plane.normal, ray->o);
     f32 t = -(d + n_dot_o) / n_dot_dir;
 
-    if (t < 0) return false;
+    if (t < HIT_EPSILON) return false;
 
     intersection->dist = t;
     intersection->normal = obj->plane.normal;
@@ -137,7 +189,7 @@ bool sphere_intersect(const Object * obj, const Ray * ray, Intersection * inters
 
     f32 t = MIN(t0, t1);
     if (t <= 0) t = MAX(t0, t1);
-    if (t <= 0) return false;
+    if (t < HIT_EPSILON) return false;
 
     intersection->dist = t;
     intersection->normal = vec3_normalize(vec3_sub(ray_make_point(ray, t), obj->center));
@@ -153,14 +205,6 @@ bool object_intersect(const Object * obj, const Ray * ray, Intersection * inters
         return plane_intersect(obj, ray, intersection);
     }
     return false;
-}
-
-Vec3 object_shade(const Object * obj, const Intersection * intersection, Vec3 direction)
-{
-    Vec3 color = obj->color;
-    f32 k = vec3_dot(intersection->normal, direction);
-    k = MAX(k, 0.0f);
-    return vec3_mult_k(color, k);
 }
 
 typedef struct World
@@ -201,6 +245,9 @@ int main(int argc, char * argv[])
 
     Camera camera = make_camera(width, height);
     u8 * image_data = malloc(width * height * 3);
+    Vec3 * image_data_linear = malloc(width * height * sizeof(Vec3));
+
+    memset(image_data_linear, width * height * sizeof(Vec3), 0);
 
     SDL_Surface * image_surface = SDL_CreateRGBSurfaceFrom(
             image_data, width, height, 24, width * 3,
@@ -208,45 +255,73 @@ int main(int argc, char * argv[])
 
     i32 objects_count = 3;
     Object objects[] = { 
-        make_sphere(1.0f, (Vec3){ -1.5f, 5.0f, 1.0f }, (Vec3){ 1.0f, 0.0f, 0.0f }),
-        make_sphere(1.0f, (Vec3){ 1.5f, 5.0f, 1.0f }, (Vec3){ 1.0f, 0.5f, 0.0f }),
-        make_plane((Vec3){ 0.0f, 0.0f, 1.0f }, (Vec3){ 0.0f, 0.0f, 0.0f }, (Vec3){ 0.7f, 0.7f, 0.7f })
+        make_sphere(1.0f, (Vec3){ -1.5f, 5.0f, 1.0f }, (Vec3){ 0.9f, 0.0f, 0.0f }),
+        make_sphere(1.0f, (Vec3){ 1.5f, 5.0f, 1.0f }, (Vec3){ 0.0f, 0.9f, 0.0f }),
+        make_plane((Vec3){ 0.0f, 0.0f, 1.0f }, (Vec3){ 0.0f, 0.0f, 0.0f }, (Vec3){ 0.8f, 0.8f, 0.8f })
     };
-    
-    Vec3 sun_direction = vec3_normalize((Vec3){ -0.7f, -0.3f, 1.0f });
 
     World world = {
         .objects_count = objects_count,
         .objects = objects
     };
 
-    u8 * ptr = image_data;
-    for (u32 y = 0; y < height; ++y) {
-        for (u32 x = 0; x < width; ++x) {
-            Ray ray = camera_gen_ray(&camera, x, y);
-            Intersection intersection = { 0 };
-
-            i32 int_object = world_intersect(&world, &ray, &intersection);
-
-            Vec3 color = { 0 };
-            if (int_object >= 0) {
-                color = object_shade(&objects[int_object], &intersection, sun_direction);
-            }
-
-            color = vec3_mult_k(vec3_pow(color, 0.45f), 255.99f);
-            *ptr++ = (u8)color.z;
-            *ptr++ = (u8)color.y;
-            *ptr++ = (u8)color.x;
-        }
-    }
-
     SDL_Rect to_blit = { .x = 0, .y = 0, .w = width, .h = height };
 
     bool run = true;
+    i32 num_iter = 0;
     while (run) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_QUIT) run = false;
+        }
+
+        Vec3 * ptr_v = image_data_linear;
+        for (u32 y = 0; y < height; ++y) {
+            for (u32 x = 0; x < width; ++x) {
+                Ray ray = camera_gen_ray(&camera, x, y);
+
+                i32 remaining_bounces = 8;
+                Vec3 c = { 1.0f, 1.0f, 1.0f };
+
+                while (remaining_bounces-- > 0) {
+                    Intersection intersection = { 0 };
+                    i32 int_object = world_intersect(&world, &ray, &intersection);
+
+                    if (int_object == -1)
+                    {
+                        break;
+                    }
+                    else
+                    {
+                        f32 probability = 1.0f;
+                        ray.o = ray_make_point(&ray, intersection.dist);
+                        ray.dir = make_ray_hemisphere(intersection.normal, &probability);
+
+                        f32 intensity = vec3_dot(intersection.normal, ray.dir);
+                        intensity = MAX(intensity, 0.0f);
+
+                        intensity /= probability;
+                        c = vec3_mult(c, vec3_mult_k(objects[int_object].color, intensity));
+                    }
+                }
+
+                f32 contrib = 1.0f / (f32)(num_iter + 1);
+                *ptr_v = vec3_add(vec3_mult_k(*ptr_v, 1 - contrib), vec3_mult_k(c, contrib));
+                ptr_v++;
+            }
+        }
+
+        num_iter++;
+
+        u8 * ptr = image_data;
+        ptr_v = image_data_linear;
+        for (u32 y = 0; y < height; ++y) {
+            for (u32 x = 0; x < width; ++x) {
+                Vec3 color = vec3_mult_k(vec3_pow(*ptr_v++, 0.45f), 255.99f);
+                *ptr++ = (u8)color.z;
+                *ptr++ = (u8)color.y;
+                *ptr++ = (u8)color.x;
+            }
         }
 
         SDL_BlitSurface(image_surface, &to_blit, screen, &to_blit);
