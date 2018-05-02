@@ -87,8 +87,8 @@ typedef struct Intersection
 typedef struct Camera
 {
     Vec3 center;
-    u32 width;
-    u32 height;
+    i32 width;
+    i32 height;
     f32 ratio;
 } Camera;
 
@@ -229,6 +229,137 @@ i32 world_intersect(const World * world, const Ray * ray, Intersection * interse
     return min_object;
 }
 
+typedef enum RunStatus {
+    STATUS_WAITING_START,
+    STATUS_RUNNING,
+    STATUS_WAITING_FINISH
+} RunStatus;
+
+static const f32 russian_roulette_probability_base = 0.9f;
+static const i32 nb_threads = 12;
+
+typedef struct TracerContext
+{
+    const Camera        *   camera;
+    Vec3                *   image_data;
+    const World         *   world;
+    SDL_atomic_t            current_line;
+    i32                     num_iter;
+
+    SDL_mutex           *   status_mtx;
+    SDL_cond            *   status_cv;
+    RunStatus               status;
+
+    SDL_mutex           *   finished_mtx;
+    SDL_cond            *   finished_cv;
+    i32                     finished;
+} TracerContext;
+
+void trace_line(const TracerContext * ctx, i32 y)
+{
+    Vec3 * ptr_v = ctx->image_data + y * ctx->camera->width;
+    for (i32 x = 0; x < ctx->camera->width; ++x) {
+        Ray ray = camera_gen_ray(ctx->camera, x, y);
+        Vec3 c = { 1.0f, 1.0f, 1.0f };
+        f32 russian_roulette_probability = 1.0f;
+
+        while (true) {
+            Intersection intersection = { 0 };
+            i32 int_object = world_intersect(ctx->world, &ray, &intersection);
+
+            if (int_object == -1)
+            {
+                break;
+            }
+            else
+            {
+                f32 probability = 1.0f;
+                ray.o = ray_make_point(&ray, intersection.dist);
+                ray.dir = make_ray_hemisphere(intersection.normal, &probability);
+
+                f32 intensity = vec3_dot(intersection.normal, ray.dir);
+                intensity = MAX(intensity, 0.0f);
+
+                intensity /= probability * russian_roulette_probability;
+                c = vec3_mult(c, vec3_mult_k(ctx->world->objects[int_object].color, intensity));
+            }
+
+            if (randf(0.0f, 1.0f) > russian_roulette_probability_base) break;
+
+            russian_roulette_probability = russian_roulette_probability_base;
+        }
+
+        f32 contrib = 1.0f / (f32)(ctx->num_iter + 1);
+        *ptr_v = vec3_add(vec3_mult_k(*ptr_v, 1 - contrib), vec3_mult_k(c, contrib));
+        ptr_v++;
+    }
+}
+
+i32 fetch_current_line(TracerContext * ctx)
+{
+    while (true) {
+        i32 value = SDL_AtomicGet(&ctx->current_line);
+        if (value >= ctx->camera->height) return -1;
+
+        if (SDL_AtomicCAS(&ctx->current_line, value, value + 1)) {
+            return value;
+        }
+    }
+}
+
+i32 trace_thread(void * ctx_raw)
+{
+    SDL_SetThreadPriority(SDL_THREAD_PRIORITY_HIGH);
+    TracerContext * ctx = (TracerContext *)ctx_raw;
+    
+    while (true) {
+        SDL_LockMutex(ctx->status_mtx);
+        while (ctx->status != STATUS_RUNNING) {
+            SDL_CondWait(ctx->status_cv, ctx->status_mtx);
+        }
+        SDL_UnlockMutex(ctx->status_mtx);
+
+        bool running = true;
+        while (running) {
+            i32 line = fetch_current_line(ctx);
+            if (line < 0)
+            {
+                bool is_last = false;
+
+                SDL_LockMutex(ctx->status_mtx);
+                if (ctx->status != STATUS_WAITING_FINISH) {
+                    ctx->status = STATUS_WAITING_FINISH;
+                    SDL_CondBroadcast(ctx->status_cv);
+                }
+                SDL_UnlockMutex(ctx->status_mtx);
+
+                SDL_LockMutex(ctx->finished_mtx);
+                ctx->finished++;
+                is_last = (ctx->finished == nb_threads);
+                SDL_CondBroadcast(ctx->finished_cv);
+                while (ctx->finished < nb_threads) {
+                    SDL_CondWait(ctx->finished_cv, ctx->finished_mtx);
+                }
+                SDL_UnlockMutex(ctx->finished_mtx);
+
+                if (is_last) {
+                    SDL_LockMutex(ctx->status_mtx);
+                    ctx->status = STATUS_WAITING_START;
+                    SDL_CondBroadcast(ctx->status_cv);
+                    SDL_UnlockMutex(ctx->status_mtx);
+                }
+
+                running = false;
+            }
+            else
+            {
+                trace_line(ctx, line);
+            }
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char * argv[])
 {
     const u32 width = 600;
@@ -267,7 +398,23 @@ int main(int argc, char * argv[])
 
     SDL_Rect to_blit = { .x = 0, .y = 0, .w = width, .h = height };
 
-    const f32 russian_roulette_probability_base = 0.9f;
+    TracerContext ctx = {
+        .camera = &camera,
+        .image_data = image_data_linear,
+        .world = &world,
+        .num_iter = 0,
+        .status_mtx = SDL_CreateMutex(),
+        .status_cv = SDL_CreateCond(),
+        .status = STATUS_WAITING_START,
+        .finished_mtx = SDL_CreateMutex(),
+        .finished_cv = SDL_CreateCond(),
+        .finished = 0
+    };
+    SDL_AtomicSet(&ctx.current_line, 0);
+
+    for (i32 i = 0; i < nb_threads; ++i) {
+        SDL_Thread * thread = SDL_CreateThread(trace_thread, "tracer", &ctx);
+    }
 
     bool run = true;
     i32 num_iter = 0;
@@ -277,61 +424,38 @@ int main(int argc, char * argv[])
             if (e.type == SDL_QUIT) run = false;
         }
 
-        Vec3 * ptr_v = image_data_linear;
-        for (u32 y = 0; y < height; ++y) {
-            for (u32 x = 0; x < width; ++x) {
-                Ray ray = camera_gen_ray(&camera, x, y);
-                Vec3 c = { 1.0f, 1.0f, 1.0f };
-                f32 russian_roulette_probability = 1.0f;
+        SDL_AtomicSet(&ctx.current_line, 0);
+        ctx.finished = 0;
 
-                while (true) {
-                    Intersection intersection = { 0 };
-                    i32 int_object = world_intersect(&world, &ray, &intersection);
+        SDL_LockMutex(ctx.status_mtx);
+        ctx.status = STATUS_RUNNING;
+        SDL_CondBroadcast(ctx.status_cv);
 
-                    if (int_object == -1)
-                    {
-                        break;
-                    }
-                    else
-                    {
-                        f32 probability = 1.0f;
-                        ray.o = ray_make_point(&ray, intersection.dist);
-                        ray.dir = make_ray_hemisphere(intersection.normal, &probability);
+        while (ctx.status != STATUS_WAITING_START) {
+            SDL_CondWait(ctx.status_cv, ctx.status_mtx);
+        }
+        SDL_UnlockMutex(ctx.status_mtx);
 
-                        f32 intensity = vec3_dot(intersection.normal, ray.dir);
-                        intensity = MAX(intensity, 0.0f);
+        SDL_CompilerBarrier();
 
-                        intensity /= probability * russian_roulette_probability;
-                        c = vec3_mult(c, vec3_mult_k(objects[int_object].color, intensity));
-                    }
+        printf("%d\n", ctx.num_iter);
+        ctx.num_iter++;
 
-                    if (randf(0.0f, 1.0f) > russian_roulette_probability_base) break;
-
-                    russian_roulette_probability = russian_roulette_probability_base;
+        if (ctx.num_iter % 10 == 0) {
+            u8 * ptr = image_data;
+            Vec3 * ptr_v = image_data_linear;
+            for (u32 y = 0; y < height; ++y) {
+                for (u32 x = 0; x < width; ++x) {
+                    Vec3 color = vec3_mult_k(vec3_pow(*ptr_v++, 0.45f), 255.99f);
+                    *ptr++ = (u8)color.z;
+                    *ptr++ = (u8)color.y;
+                    *ptr++ = (u8)color.x;
                 }
-
-                f32 contrib = 1.0f / (f32)(num_iter + 1);
-                *ptr_v = vec3_add(vec3_mult_k(*ptr_v, 1 - contrib), vec3_mult_k(c, contrib));
-                ptr_v++;
             }
+
+            SDL_BlitSurface(image_surface, &to_blit, screen, &to_blit);
+            SDL_UpdateWindowSurface(window);
         }
-
-        num_iter++;
-
-        u8 * ptr = image_data;
-        ptr_v = image_data_linear;
-        for (u32 y = 0; y < height; ++y) {
-            for (u32 x = 0; x < width; ++x) {
-                Vec3 color = vec3_mult_k(vec3_pow(*ptr_v++, 0.45f), 255.99f);
-                *ptr++ = (u8)color.z;
-                *ptr++ = (u8)color.y;
-                *ptr++ = (u8)color.x;
-            }
-        }
-
-        SDL_BlitSurface(image_surface, &to_blit, screen, &to_blit);
-        SDL_UpdateWindowSurface(window);
-        SDL_Delay(33);
     }
 
     SDL_DestroyWindow(window);
