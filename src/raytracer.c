@@ -267,6 +267,8 @@ int main(int argc, char * argv[])
 
     SDL_Rect to_blit = { .x = 0, .y = 0, .w = width, .h = height };
 
+    const f32 russian_roulette_probability_base = 0.9f;
+
     bool run = true;
     i32 num_iter = 0;
     while (run) {
@@ -279,11 +281,10 @@ int main(int argc, char * argv[])
         for (u32 y = 0; y < height; ++y) {
             for (u32 x = 0; x < width; ++x) {
                 Ray ray = camera_gen_ray(&camera, x, y);
-
-                i32 remaining_bounces = 8;
                 Vec3 c = { 1.0f, 1.0f, 1.0f };
+                f32 russian_roulette_probability = 1.0f;
 
-                while (remaining_bounces-- > 0) {
+                while (true) {
                     Intersection intersection = { 0 };
                     i32 int_object = world_intersect(&world, &ray, &intersection);
 
@@ -300,9 +301,13 @@ int main(int argc, char * argv[])
                         f32 intensity = vec3_dot(intersection.normal, ray.dir);
                         intensity = MAX(intensity, 0.0f);
 
-                        intensity /= probability;
+                        intensity /= probability * russian_roulette_probability;
                         c = vec3_mult(c, vec3_mult_k(objects[int_object].color, intensity));
                     }
+
+                    if (randf(0.0f, 1.0f) > russian_roulette_probability_base) break;
+
+                    russian_roulette_probability = russian_roulette_probability_base;
                 }
 
                 f32 contrib = 1.0f / (f32)(num_iter + 1);
