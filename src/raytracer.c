@@ -229,13 +229,6 @@ i32 world_intersect(const World * world, const Ray * ray, Intersection * interse
     return min_object;
 }
 
-typedef enum RunStatus {
-    STATUS_WAITING_START,
-    STATUS_RUNNING,
-    STATUS_WAITING_FINISH
-} RunStatus;
-
-static const f32 russian_roulette_probability_base = 0.9f;
 static const i32 nb_threads = 12;
 
 typedef struct TracerContext
@@ -248,7 +241,6 @@ typedef struct TracerContext
 
     SDL_mutex           *   status_mtx;
     SDL_cond            *   status_cv;
-    RunStatus               status;
 
     SDL_mutex           *   finished_mtx;
     SDL_cond            *   finished_cv;
@@ -261,9 +253,9 @@ void trace_line(const TracerContext * ctx, i32 y)
     for (i32 x = 0; x < ctx->camera->width; ++x) {
         Ray ray = camera_gen_ray(ctx->camera, x, y);
         Vec3 c = { 1.0f, 1.0f, 1.0f };
-        f32 russian_roulette_probability = 1.0f;
 
-        while (true) {
+        i32 num_bounces = 0;
+        while (num_bounces < 16) {
             Intersection intersection = { 0 };
             i32 int_object = world_intersect(ctx->world, &ray, &intersection);
 
@@ -280,13 +272,14 @@ void trace_line(const TracerContext * ctx, i32 y)
                 f32 intensity = vec3_dot(intersection.normal, ray.dir);
                 intensity = MAX(intensity, 0.0f);
 
-                intensity /= probability * russian_roulette_probability;
+                intensity /= probability;
                 c = vec3_mult(c, vec3_mult_k(ctx->world->objects[int_object].color, intensity));
             }
 
-            if (randf(0.0f, 1.0f) > russian_roulette_probability_base) break;
-
-            russian_roulette_probability = russian_roulette_probability_base;
+            f32 c_max = MAX(MAX(c.x, c.y), c.z);
+            if (randf(0.0f, 1.0f) > c_max) break;
+            c = vec3_mult_k(c, c_max);
+            num_bounces++;
         }
 
         f32 contrib = 1.0f / (f32)(ctx->num_iter + 1);
@@ -311,52 +304,31 @@ i32 trace_thread(void * ctx_raw)
 {
     SDL_SetThreadPriority(SDL_THREAD_PRIORITY_HIGH);
     TracerContext * ctx = (TracerContext *)ctx_raw;
-    
+
     while (true) {
-        SDL_LockMutex(ctx->status_mtx);
-        while (ctx->status != STATUS_RUNNING) {
-            SDL_CondWait(ctx->status_cv, ctx->status_mtx);
-        }
-        SDL_UnlockMutex(ctx->status_mtx);
+        i32 line = fetch_current_line(ctx);
 
-        bool running = true;
-        while (running) {
-            i32 line = fetch_current_line(ctx);
-            if (line < 0)
-            {
-                bool is_last = false;
-
-                SDL_LockMutex(ctx->status_mtx);
-                if (ctx->status != STATUS_WAITING_FINISH) {
-                    ctx->status = STATUS_WAITING_FINISH;
-                    SDL_CondBroadcast(ctx->status_cv);
+        if (line < 0) {
+            SDL_LockMutex(ctx->status_mtx);
+            while (true) {
+                line = fetch_current_line(ctx);
+                if (line >= 0) {
+                    break;
                 }
-                SDL_UnlockMutex(ctx->status_mtx);
-
-                SDL_LockMutex(ctx->finished_mtx);
-                ctx->finished++;
-                is_last = (ctx->finished == nb_threads);
-                SDL_CondBroadcast(ctx->finished_cv);
-                while (ctx->finished < nb_threads) {
-                    SDL_CondWait(ctx->finished_cv, ctx->finished_mtx);
-                }
-                SDL_UnlockMutex(ctx->finished_mtx);
-
-                if (is_last) {
-                    SDL_LockMutex(ctx->status_mtx);
-                    ctx->status = STATUS_WAITING_START;
-                    SDL_CondBroadcast(ctx->status_cv);
-                    SDL_UnlockMutex(ctx->status_mtx);
-                }
-
-                running = false;
+                SDL_CondWait(ctx->status_cv, ctx->status_mtx);
             }
-            else
-            {
-                trace_line(ctx, line);
-            }
+            SDL_UnlockMutex(ctx->status_mtx);
         }
+
+        trace_line(ctx, line);
+        SDL_CompilerBarrier();
+
+        SDL_LockMutex(ctx->finished_mtx);
+        ctx->finished++;
+        SDL_CondSignal(ctx->finished_cv);
+        SDL_UnlockMutex(ctx->finished_mtx);
     }
+
     return 0;
 }
 
@@ -405,7 +377,6 @@ int main(int argc, char * argv[])
         .num_iter = 0,
         .status_mtx = SDL_CreateMutex(),
         .status_cv = SDL_CreateCond(),
-        .status = STATUS_WAITING_START,
         .finished_mtx = SDL_CreateMutex(),
         .finished_cv = SDL_CreateCond(),
         .finished = 0
@@ -424,19 +395,18 @@ int main(int argc, char * argv[])
             if (e.type == SDL_QUIT) run = false;
         }
 
-        SDL_AtomicSet(&ctx.current_line, 0);
+        SDL_LockMutex(ctx.finished_mtx);
         ctx.finished = 0;
+        SDL_UnlockMutex(ctx.finished_mtx);
 
-        SDL_LockMutex(ctx.status_mtx);
-        ctx.status = STATUS_RUNNING;
+        SDL_AtomicSet(&ctx.current_line, 0);
         SDL_CondBroadcast(ctx.status_cv);
 
-        while (ctx.status != STATUS_WAITING_START) {
-            SDL_CondWait(ctx.status_cv, ctx.status_mtx);
+        SDL_LockMutex(ctx.finished_mtx);
+        while (ctx.finished < camera.height) {
+            SDL_CondWait(ctx.finished_cv, ctx.finished_mtx);
         }
-        SDL_UnlockMutex(ctx.status_mtx);
-
-        SDL_CompilerBarrier();
+        SDL_UnlockMutex(ctx.finished_mtx);
 
         printf("%d\n", ctx.num_iter);
         ctx.num_iter++;
