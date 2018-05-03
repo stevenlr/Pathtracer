@@ -56,13 +56,16 @@ Vec3 make_ray_hemisphere(Vec3 n, f32 * probability)
     f32 v_uniform = randf(0.0f, 1.0f);
 
     f32 hangle = 2.0f * (f32)M_PI * h_uniform;
-    f32 vangle = asinf(sqrtf(v_uniform));
 
-    f32 sin_vangle = sinf(vangle);
+    f32 sin_vangle = sqrtf(v_uniform);
+    f32 cos_vangle = sqrtf(1.0f - v_uniform);
+    f32 vangle = asinf(sin_vangle);
+
+    *probability = sin_vangle * cos_vangle / ((f32)M_PI);
 
     Vec3 u = vec3_mult_k(frame.u, cosf(hangle) * sin_vangle);
     Vec3 v = vec3_mult_k(frame.v, sinf(hangle) * sin_vangle);
-    n = vec3_mult_k(frame.n, cosf(vangle));
+    n = vec3_mult_k(frame.n, cos_vangle);
     
     return vec3_add(vec3_add(u, v), n);
 }
@@ -249,37 +252,45 @@ typedef struct TracerContext
 
 void trace_line(const TracerContext * ctx, i32 y)
 {
+    Vec3 sky = { 1.0f, 1.0f, 1.0f };
     Vec3 * ptr_v = ctx->image_data + y * ctx->camera->width;
     for (i32 x = 0; x < ctx->camera->width; ++x) {
         Ray ray = camera_gen_ray(ctx->camera, x, y);
         Vec3 c = { 1.0f, 1.0f, 1.0f };
 
-        i32 num_bounces = 0;
-        while (num_bounces < 16) {
+        i32 nb_bounces = 0;
+        while (true) {
             Intersection intersection = { 0 };
             i32 int_object = world_intersect(ctx->world, &ray, &intersection);
 
-            if (int_object == -1)
-            {
+            if (int_object == -1) {
+                c = vec3_mult(c, sky);
                 break;
             }
-            else
-            {
+            else {
                 f32 probability = 1.0f;
                 ray.o = ray_make_point(&ray, intersection.dist);
                 ray.dir = make_ray_hemisphere(intersection.normal, &probability);
+                probability = MAX(probability, 0.0001f);
 
-                f32 intensity = vec3_dot(intersection.normal, ray.dir);
+                f32 intensity = vec3_dot(intersection.normal, ray.dir);// / ((f32)M_PI);
                 intensity = MAX(intensity, 0.0f);
 
-                intensity /= probability;
+                // intensity /= probability;
                 c = vec3_mult(c, vec3_mult_k(ctx->world->objects[int_object].color, intensity));
             }
 
-            f32 c_max = MAX(MAX(c.x, c.y), c.z);
-            if (randf(0.0f, 1.0f) > c_max) break;
-            c = vec3_mult_k(c, c_max);
-            num_bounces++;
+            // f32 c_max = MAX(MAX(c.x, c.y), c.z);
+            // c_max = MIN(MAX(c_max, 0.00001f), 1.0f);
+            if (randf(0.0f, 1.0f) > 0.95f) {
+                break;
+            }
+
+            if (nb_bounces > 0) {
+                c = vec3_mult_k(c, 1.0f / 0.95f);
+            }
+
+            nb_bounces++;
         }
 
         f32 contrib = 1.0f / (f32)(ctx->num_iter + 1);
@@ -358,9 +369,9 @@ int main(int argc, char * argv[])
 
     i32 objects_count = 3;
     Object objects[] = { 
-        make_sphere(1.0f, (Vec3){ -1.5f, 5.0f, 1.0f }, (Vec3){ 0.9f, 0.0f, 0.0f }),
-        make_sphere(1.0f, (Vec3){ 1.5f, 5.0f, 1.0f }, (Vec3){ 0.0f, 0.9f, 0.0f }),
-        make_plane((Vec3){ 0.0f, 0.0f, 1.0f }, (Vec3){ 0.0f, 0.0f, 0.0f }, (Vec3){ 0.8f, 0.8f, 0.8f })
+        make_plane((Vec3){ 0.0f, 0.0f, 1.0f }, (Vec3){ 0.0f, 0.0f, 0.0f }, (Vec3){ 0.7f, 0.7f, 0.7f }),
+        make_sphere(1.0f, (Vec3){ -1.5f, 5.0f, 1.0f }, (Vec3){ 0.8f, 0.0f, 0.0f }),
+        make_sphere(1.0f, (Vec3){ 1.5f, 5.0f, 1.0f }, (Vec3){ 0.0f, 0.8f, 0.0f })
     };
 
     World world = {
@@ -408,18 +419,19 @@ int main(int argc, char * argv[])
         }
         SDL_UnlockMutex(ctx.finished_mtx);
 
-        printf("%d\n", ctx.num_iter);
         ctx.num_iter++;
 
         if (ctx.num_iter % 10 == 0) {
+            printf("%d\n", ctx.num_iter);
+
             u8 * ptr = image_data;
             Vec3 * ptr_v = image_data_linear;
             for (u32 y = 0; y < height; ++y) {
                 for (u32 x = 0; x < width; ++x) {
                     Vec3 color = vec3_mult_k(vec3_pow(*ptr_v++, 0.45f), 255.99f);
-                    *ptr++ = (u8)color.z;
-                    *ptr++ = (u8)color.y;
-                    *ptr++ = (u8)color.x;
+                    *ptr++ = (u8)(MIN(MAX(color.z, 0.0f), 255.99f));
+                    *ptr++ = (u8)(MIN(MAX(color.y, 0.0f), 255.99f));
+                    *ptr++ = (u8)(MIN(MAX(color.x, 0.0f), 255.99f));
                 }
             }
 
