@@ -61,7 +61,7 @@ Vec3 make_ray_hemisphere(Vec3 n, f32 * probability)
     f32 cos_vangle = sqrtf(1.0f - v_uniform);
     f32 vangle = asinf(sin_vangle);
 
-    *probability = sin_vangle * cos_vangle / ((f32)M_PI);
+    *probability = cos_vangle / ((f32)M_PI);
 
     Vec3 u = vec3_mult_k(frame.u, cosf(hangle) * sin_vangle);
     Vec3 v = vec3_mult_k(frame.v, sinf(hangle) * sin_vangle);
@@ -232,7 +232,7 @@ i32 world_intersect(const World * world, const Ray * ray, Intersection * interse
     return min_object;
 }
 
-static const i32 nb_threads = 12;
+static const i32 nb_threads = 10;
 
 typedef struct TracerContext
 {
@@ -273,21 +273,21 @@ void trace_line(const TracerContext * ctx, i32 y)
                 ray.dir = make_ray_hemisphere(intersection.normal, &probability);
                 probability = MAX(probability, 0.0001f);
 
-                f32 intensity = vec3_dot(intersection.normal, ray.dir);// / ((f32)M_PI);
+                f32 intensity = vec3_dot(intersection.normal, ray.dir) / ((f32)M_PI);
                 intensity = MAX(intensity, 0.0f);
 
-                // intensity /= probability;
+                intensity /= probability;
                 c = vec3_mult(c, vec3_mult_k(ctx->world->objects[int_object].color, intensity));
             }
 
-            // f32 c_max = MAX(MAX(c.x, c.y), c.z);
-            // c_max = MIN(MAX(c_max, 0.00001f), 1.0f);
-            if (randf(0.0f, 1.0f) > 0.95f) {
+            // @Todo How to make this non biased?
+            f32 rr = 0.95f;
+            if (randf(0.0f, 1.0f) > rr) {
                 break;
             }
 
             if (nb_bounces > 0) {
-                c = vec3_mult_k(c, 1.0f / 0.95f);
+                c = vec3_mult_k(c, 1.0f / rr);
             }
 
             nb_bounces++;
@@ -421,7 +421,7 @@ int main(int argc, char * argv[])
 
         ctx.num_iter++;
 
-        if (ctx.num_iter % 10 == 0) {
+        if (ctx.num_iter % 50 == 0) {
             printf("%d\n", ctx.num_iter);
 
             u8 * ptr = image_data;
