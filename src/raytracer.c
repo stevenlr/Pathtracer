@@ -212,6 +212,9 @@ bool object_intersect(const Object * obj, const Ray * ray, Intersection * inters
 
 typedef struct World
 {
+    Vec3 sun_dir;
+    Vec3 sun_color;
+    Vec3 sky_color;
     i32 objects_count;
     Object * objects;
 } World;
@@ -252,11 +255,11 @@ typedef struct TracerContext
 
 void trace_line(const TracerContext * ctx, i32 y)
 {
-    Vec3 sky = { 1.0f, 1.0f, 1.0f };
     Vec3 * ptr_v = ctx->image_data + y * ctx->camera->width;
     for (i32 x = 0; x < ctx->camera->width; ++x) {
         Ray ray = camera_gen_ray(ctx->camera, x, y);
-        Vec3 c = { 1.0f, 1.0f, 1.0f };
+        Vec3 mask = { 1.0f, 1.0f, 1.0f };
+        Vec3 accum = { 0.0f, 0.0f, 0.0f };
 
         i32 nb_bounces = 0;
         while (true) {
@@ -264,20 +267,39 @@ void trace_line(const TracerContext * ctx, i32 y)
             i32 int_object = world_intersect(ctx->world, &ray, &intersection);
 
             if (int_object == -1) {
-                c = vec3_mult(c, sky);
+                accum = vec3_add(accum, vec3_mult(mask, ctx->world->sky_color));
                 break;
             }
             else {
-                f32 probability = 1.0f;
-                ray.o = ray_make_point(&ray, intersection.dist);
-                ray.dir = make_ray_hemisphere(intersection.normal, &probability);
-                probability = MAX(probability, 0.0001f);
+                Vec3 int_pos = ray_make_point(&ray, intersection.dist);
+                mask = vec3_mult(mask, ctx->world->objects[int_object].color);
 
-                f32 intensity = vec3_dot(intersection.normal, ray.dir) / ((f32)M_PI);
-                intensity = MAX(intensity, 0.0f);
+                // Sun ray
+                {
+                    Intersection int_sun;
+                    Ray sun_ray = { int_pos, vec3_mult_k(ctx->world->sun_dir, -1.0f) };
+                    i32 int_sun_obj = world_intersect(ctx->world, &sun_ray, &int_sun);
 
-                intensity /= probability;
-                c = vec3_mult(c, vec3_mult_k(ctx->world->objects[int_object].color, intensity));
+                    if (int_sun_obj == -1) {
+                        f32 intensity = -vec3_dot(intersection.normal, ctx->world->sun_dir);
+                        intensity = MAX(intensity, 0.0f);
+                        accum = vec3_add(accum, vec3_mult_k(vec3_mult(ctx->world->sun_color, mask), intensity));
+                    }
+                }
+
+                // Next ray
+                {
+                    f32 probability = 1.0f;
+                    ray.o = int_pos;
+                    ray.dir = make_ray_hemisphere(intersection.normal, &probability);
+                    probability = MAX(probability, 0.0001f);
+
+                    f32 intensity = vec3_dot(intersection.normal, ray.dir) / ((f32)M_PI);
+                    intensity = MAX(intensity, 0.0f);
+
+                    intensity /= probability;
+                    mask = vec3_mult_k(mask, intensity);
+                }
             }
 
             // @Todo How to make this non biased?
@@ -287,14 +309,14 @@ void trace_line(const TracerContext * ctx, i32 y)
             }
 
             if (nb_bounces > 0) {
-                c = vec3_mult_k(c, 1.0f / rr);
+                mask = vec3_mult_k(mask, 1.0f / rr);
             }
 
             nb_bounces++;
         }
 
         f32 contrib = 1.0f / (f32)(ctx->num_iter + 1);
-        *ptr_v = vec3_add(vec3_mult_k(*ptr_v, 1 - contrib), vec3_mult_k(c, contrib));
+        *ptr_v = vec3_add(vec3_mult_k(*ptr_v, 1 - contrib), vec3_mult_k(accum, contrib));
         ptr_v++;
     }
 }
@@ -369,12 +391,15 @@ int main(int argc, char * argv[])
 
     i32 objects_count = 3;
     Object objects[] = { 
-        make_plane((Vec3){ 0.0f, 0.0f, 1.0f }, (Vec3){ 0.0f, 0.0f, 0.0f }, (Vec3){ 0.7f, 0.7f, 0.7f }),
-        make_sphere(1.0f, (Vec3){ -1.5f, 5.0f, 1.0f }, (Vec3){ 0.8f, 0.0f, 0.0f }),
-        make_sphere(1.0f, (Vec3){ 1.5f, 5.0f, 1.0f }, (Vec3){ 0.0f, 0.8f, 0.0f })
+        make_plane((Vec3){ 0.0f, 0.0f, 1.0f }, (Vec3){ 0.0f, 0.0f, 0.0f }, (Vec3){ 0.5f, 0.5f, 0.5f }),
+        make_sphere(1.0f, (Vec3){ -1.5f, 5.0f, 1.0f }, (Vec3){ 0.8f, 0.02f, 0.02f }),
+        make_sphere(1.0f, (Vec3){ 1.5f, 5.0f, 1.0f }, (Vec3){ 0.4f, 0.7f, 0.4f })
     };
 
     World world = {
+        .sun_dir = vec3_normalize((Vec3){ -0.5f, 0.1f, -0.6f }),
+        .sun_color = (Vec3){ 1.0f, 0.95f, 0.9f },
+        .sky_color = (Vec3){ 0.1f, 0.15f, 0.2f },
         .objects_count = objects_count,
         .objects = objects
     };
