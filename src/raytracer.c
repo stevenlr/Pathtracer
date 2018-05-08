@@ -391,9 +391,9 @@ int main(int argc, char * argv[])
 
     i32 objects_count = 3;
     Object objects[] = { 
-        make_plane((Vec3){ 0.0f, 0.0f, 1.0f }, (Vec3){ 0.0f, 0.0f, 0.0f }, (Vec3){ 0.5f, 0.5f, 0.5f }),
-        make_sphere(1.0f, (Vec3){ -1.5f, 5.0f, 1.0f }, (Vec3){ 0.8f, 0.02f, 0.02f }),
-        make_sphere(1.0f, (Vec3){ 1.5f, 5.0f, 1.0f }, (Vec3){ 0.4f, 0.7f, 0.4f })
+        make_plane((Vec3){ 0.0f, 0.0f, 1.0f }, (Vec3){ 0.0f, 0.0f, 0.0f }, (Vec3){ 0.6f, 0.6f, 0.6f }),
+        make_sphere(1.0f, (Vec3){ -1.5f, 5.0f, 1.0f }, (Vec3){ 0.9f, 0.02f, 0.02f }),
+        make_sphere(1.0f, (Vec3){ 1.5f, 5.0f, 1.0f }, (Vec3){ 0.6f, 0.6f, 0.6f })
     };
 
     World world = {
