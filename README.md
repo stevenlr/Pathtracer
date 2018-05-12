@@ -7,7 +7,7 @@ Pathtracer
  - [ ] Statistics
  - [x] Spheres
  - [x] Planes
- - [ ] Cubes
+ - [x] Cubes
  - [ ] Transforms
  - [x] Ambient lighting
  - [x] Direct lighting

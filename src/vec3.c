@@ -5,6 +5,20 @@ typedef struct Vec3
     f32 z;
 } Vec3;
 
+inline f32 vec3_max(Vec3 v)
+{
+    float x = fabsf(v.x);
+    float y = fabsf(v.y);
+    float z = fabsf(v.z);
+    f32 m = MAX(x, y);
+    return MAX(m, z);
+}
+
+inline f32 vec3_e(Vec3 v, i32 n)
+{
+    return ((f32 *)&v)[n];
+}
+
 inline Vec3 vec3_neg(Vec3 v)
 {
     return (Vec3){ -v.x, -v.y, -v.z };

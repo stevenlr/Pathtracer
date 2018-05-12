@@ -118,6 +118,7 @@ Ray camera_gen_ray(const Camera * cam, u32 x, u32 y)
 
 typedef enum ObjectType {
     OBJECT_SPHERE,
+    OBJECT_CUBE,
     OBJECT_PLANE
 } ObjectType;
 
@@ -130,7 +131,7 @@ typedef struct Object {
         struct
         {
             f32 radius;
-        } sphere;
+        } sphere, cube;
         struct
         {
             Vec3 normal;
@@ -145,6 +146,16 @@ Object make_sphere(f32 radius, Vec3 center, Vec3 color)
         .center = center,
         .color = color,
         .sphere.radius = radius
+    };
+}
+
+Object make_cube(f32 radius, Vec3 center, Vec3 color)
+{
+    return (Object){
+        .type = OBJECT_CUBE,
+        .center = center,
+        .color = color,
+        .cube.radius = radius
     };
 }
 
@@ -199,11 +210,56 @@ bool sphere_intersect(const Object * obj, const Ray * ray, Intersection * inters
     return true;
 }
 
+bool cube_intersect(const Object * obj, const Ray * ray, Intersection * intersection)
+{
+    const Vec3 normals[6] = {
+        {  1.0f,  0.0f,  0.0f },
+        { -1.0f,  0.0f,  0.0f },
+        {  0.0f,  1.0f,  0.0f },
+        {  0.0f, -1.0f,  0.0f },
+        {  0.0f,  0.0f,  1.0f },
+        {  0.0f,  0.0f, -1.0f },
+    };
+    const i32 axis[6] = { 0, 0, 1, 1, 2, 2 };
+
+    f32 r = obj->cube.radius;
+    const Vec3 c = obj->center;
+
+    f32 t_min = -1.0f;
+    Vec3 int_normal;
+    Vec3 o_to_c = vec3_sub(c, ray->o);
+
+    for (i32 i = 0; i < 6; ++i) {
+        const Vec3 n = normals[i];
+        f32 n_dot_d = vec3_dot(n, ray->dir);
+        if (n_dot_d >= 0.0f) continue;
+
+        f32 t = (vec3_dot(n, o_to_c) + r) / n_dot_d;
+        if (t > t_min && t_min >= 0.0f) continue;
+
+        Vec3 diff = vec3_sub(ray_make_point(ray, t), c);
+        if (vec3_max(diff) <= r + HIT_EPSILON) {
+            t_min = t;
+            int_normal = n;
+        }
+    }
+
+    if (t_min < 0.0f) {
+        return false;
+    }
+
+    intersection->dist = t_min;
+    intersection->normal = int_normal;
+    return true;
+}
+
 bool object_intersect(const Object * obj, const Ray * ray, Intersection * intersection)
 {
     switch (obj->type) {
     case OBJECT_SPHERE:
         return sphere_intersect(obj, ray, intersection);
+    case OBJECT_CUBE:
+        return cube_intersect(obj, ray, intersection);
     case OBJECT_PLANE:
         return plane_intersect(obj, ray, intersection);
     }
@@ -302,7 +358,6 @@ void trace_line(const TracerContext * ctx, i32 y)
                 }
             }
 
-            // @Todo How to make this non biased?
             f32 rr = 0.95f;
             if (randf(0.0f, 1.0f) > rr) {
                 break;
@@ -392,7 +447,7 @@ int main(int argc, char * argv[])
     i32 objects_count = 3;
     Object objects[] = { 
         make_plane((Vec3){ 0.0f, 0.0f, 1.0f }, (Vec3){ 0.0f, 0.0f, 0.0f }, (Vec3){ 0.6f, 0.6f, 0.6f }),
-        make_sphere(1.0f, (Vec3){ -1.5f, 5.0f, 1.0f }, (Vec3){ 0.9f, 0.02f, 0.02f }),
+        make_cube(1.0f, (Vec3){ -1.5f, 5.0f, 1.0f }, (Vec3){ 0.9f, 0.02f, 0.02f }),
         make_sphere(1.0f, (Vec3){ 1.5f, 5.0f, 1.0f }, (Vec3){ 0.6f, 0.6f, 0.6f })
     };
 
