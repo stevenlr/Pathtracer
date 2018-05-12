@@ -5,13 +5,14 @@ Pathtracer
  - [x] Multi-threading
  - [ ] Vectorization
  - [ ] Statistics
+ - [ ] Scene description language
  - [x] Spheres
  - [x] Planes
  - [x] Cubes
  - [ ] Transforms
  - [x] Ambient lighting
  - [x] Direct lighting
- - [ ] Emissive objects
+ - [x] Emissive objects
  - [x] Lambert BRDF
  - [ ] Blinn-phong BRDF 
  - [ ] PBR material

@@ -126,6 +126,7 @@ typedef struct Object {
     ObjectType type;
     Vec3 center;
     Vec3 color;
+    f32 emissive;
     union
     {
         struct
@@ -139,32 +140,35 @@ typedef struct Object {
     };
 } Object;
 
-Object make_sphere(f32 radius, Vec3 center, Vec3 color)
+Object make_sphere(f32 radius, Vec3 center, Vec3 color, f32 emissive)
 {
     return (Object){
         .type = OBJECT_SPHERE,
         .center = center,
         .color = color,
+        .emissive = emissive,
         .sphere.radius = radius
     };
 }
 
-Object make_cube(f32 radius, Vec3 center, Vec3 color)
+Object make_cube(f32 radius, Vec3 center, Vec3 color, f32 emissive)
 {
     return (Object){
         .type = OBJECT_CUBE,
         .center = center,
         .color = color,
+        .emissive = emissive,
         .cube.radius = radius
     };
 }
 
-Object make_plane(Vec3 normal, Vec3 center, Vec3 color)
+Object make_plane(Vec3 normal, Vec3 center, Vec3 color, f32 emissive)
 {
     return (Object){
         .type = OBJECT_PLANE,
         .center = center,
         .color = color,
+        .emissive = emissive,
         .plane.normal = vec3_normalize(normal)
     };
 }
@@ -342,9 +346,13 @@ void trace_line(const TracerContext * ctx, i32 y)
                         accum = vec3_add(accum, vec3_mult_k(vec3_mult(ctx->world->sun_color, mask), intensity));
                     }
                 }
-
-                // Next ray
-                {
+                
+                f32 emissive = ctx->world->objects[int_object].emissive;
+                if (emissive > 0.0f) {
+                    accum = vec3_add(accum, vec3_mult((Vec3){ emissive, emissive, emissive }, mask));
+                    break;
+                }
+                else {
                     f32 probability = 1.0f;
                     ray.o = int_pos;
                     ray.dir = make_ray_hemisphere(intersection.normal, &probability);
@@ -446,15 +454,18 @@ int main(int argc, char * argv[])
 
     i32 objects_count = 3;
     Object objects[] = { 
-        make_plane((Vec3){ 0.0f, 0.0f, 1.0f }, (Vec3){ 0.0f, 0.0f, 0.0f }, (Vec3){ 0.6f, 0.6f, 0.6f }),
-        make_cube(1.0f, (Vec3){ -1.5f, 5.0f, 1.0f }, (Vec3){ 0.9f, 0.02f, 0.02f }),
-        make_sphere(1.0f, (Vec3){ 1.5f, 5.0f, 1.0f }, (Vec3){ 0.6f, 0.6f, 0.6f })
+        make_plane((Vec3){ 0.0f, 0.0f, 1.0f }, (Vec3){ 0.0f, 0.0f, 0.0f }, (Vec3){ 0.6f, 0.6f, 0.6f }, 0.0f),
+        make_cube(0.5f, (Vec3){ -1.5f, 5.0f, 0.5f }, (Vec3){ 0.9f, 0.02f, 0.02f }, 0.0f),
+        make_sphere(1.0f, (Vec3){ 1.5f, 5.0f, 1.0f }, (Vec3){ 0.6f, 0.6f, 0.6f }, 0.0f),
+        make_sphere(0.3f, (Vec3){ 0.0f, 5.0f, 2.5f }, (Vec3){ 1.0f, 1.0f, 1.0f }, 20.0f)
     };
 
+    const f32 sun_mult = 1.0f;
+    const f32 sky_mult = 1.0f;
     World world = {
         .sun_dir = vec3_normalize((Vec3){ -0.5f, 0.1f, -0.6f }),
-        .sun_color = (Vec3){ 1.0f, 0.95f, 0.9f },
-        .sky_color = (Vec3){ 0.1f, 0.15f, 0.2f },
+        .sun_color = vec3_mult_k((Vec3){ 1.0f, 0.95f, 0.9f }, sun_mult),
+        .sky_color = vec3_mult_k((Vec3){ 0.1f, 0.15f, 0.2f }, sky_mult),
         .objects_count = objects_count,
         .objects = objects
     };
